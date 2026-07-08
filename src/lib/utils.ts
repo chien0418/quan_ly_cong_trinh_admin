@@ -23,7 +23,26 @@ export function formatDateTime(value?: string | null) {
 }
 
 export function safeFileName(name: string) {
-  return name.trim().replace(/[\\/:*?"<>|\s]+/g, '_') || 'file.pdf'
+  const trimmedName = name.trim()
+
+  const extensionMatch = trimmedName.match(/\.([A-Za-z0-9]{1,10})$/)
+  const extension = extensionMatch
+    ? `.${extensionMatch[1].toLowerCase()}`
+    : ''
+
+  const baseName = extension
+    ? trimmedName.slice(0, -extension.length)
+    : trimmedName
+
+  const safeBaseName = baseName
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\x20-\x7E]/g, '')
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .replace(/^[._-]+|[._-]+$/g, '')
+    .slice(0, 120)
+
+  return `${safeBaseName || 'file'}${extension}`
 }
 
 export function humanBytes(value?: number | null) {
