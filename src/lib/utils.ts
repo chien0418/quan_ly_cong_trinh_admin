@@ -32,3 +32,30 @@ export function humanBytes(value?: number | null) {
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`
   return `${(value / (1024 * 1024)).toFixed(1)} MB`
 }
+
+const UPLOAD_CONTENT_TYPES: Record<string, string> = {
+  '.pdf': 'application/pdf',
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
+  '.csv': 'text/csv',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+}
+
+export function resolveUploadContentType(
+  fileName: string,
+  browserContentType?: string,
+) {
+  const normalizedName = fileName.trim().toLowerCase()
+
+  const matchedExtension = Object.keys(UPLOAD_CONTENT_TYPES).find(
+    (extension) => normalizedName.endsWith(extension),
+  )
+
+  if (matchedExtension) {
+    return UPLOAD_CONTENT_TYPES[matchedExtension]
+  }
+
+  return browserContentType?.trim() || 'application/octet-stream'
+}

@@ -10,7 +10,7 @@ import { PdfDropZone } from '@/components/pdf-drop-zone'
 import { createClient } from '@/lib/supabase/client'
 import { useAuth } from '@/components/auth-provider'
 import type { ChecklistItemRow, DocumentRow, DrawingFile, DrawingFolder, Project, UpdateLog, UserRole, WorkflowStep } from '@/lib/types'
-import { formatDate, formatDateTime, humanBytes, safeFileName } from '@/lib/utils'
+import { formatDate, formatDateTime, humanBytes, resolveUploadContentType, safeFileName } from '@/lib/utils'
 import { detailStatusToDbStatus, getWorkflowDetailSpec, isWaitingDetailStatus } from '@/lib/workflow-detail-spec'
 
 const DOCUMENT_TYPES = [
@@ -361,7 +361,10 @@ function StepEditor({ open, step, profileId, profileName, documents, checklistIt
     try {
       for (const [index, file] of stepPdfFiles.entries()) {
         const storagePath = `${currentForm.project_id}/documents/${currentForm.id}/${Date.now()}_${index}_${safeFileName(file.name)}`
-        const storage = await supabase.storage.from('project-files').upload(storagePath, file, { upsert: false })
+        const storage = await supabase.storage.from('project-files').upload(storagePath, file, {
+          upsert: false,
+          contentType: resolveUploadContentType(file.name, file.type),
+        })
         if (storage.error) throw storage.error
         const insert = await supabase.from('documents').insert({
           project_id: currentForm.project_id,
@@ -659,7 +662,10 @@ function DocumentsPanel({ projectId, profileId, steps, documents, onReload, onEr
     try {
       const stepFolder = workflowStepId || 'common'
       const storagePath = `${projectId}/documents/${stepFolder}/${Date.now()}_${safeFileName(file.name)}`
-      const storage = await supabase.storage.from('project-files').upload(storagePath, file, { upsert: false })
+      const storage = await supabase.storage.from('project-files').upload(storagePath, file, {
+        upsert: false,
+        contentType: resolveUploadContentType(file.name, file.type),
+      })
       if (storage.error) throw storage.error
       const insert = await supabase.from('documents').insert({
         project_id: projectId,
@@ -802,7 +808,10 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
     const supabase = createClient()
     try {
       const storagePath = `${projectId}/drawings/${selectedFolderId}/${Date.now()}_${safeFileName(file.name)}`
-      const storage = await supabase.storage.from('project-files').upload(storagePath, file, { upsert: false })
+      const storage = await supabase.storage.from('project-files').upload(storagePath, file, {
+        upsert: false,
+        contentType: resolveUploadContentType(file.name, file.type),
+      })
       if (storage.error) throw storage.error
       const insert = await supabase.from('drawing_files').insert({
         drawing_folder_id: selectedFolderId,
