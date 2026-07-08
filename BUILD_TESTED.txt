@@ -1,0 +1,9 @@
+ĐÃ KIỂM TRA
+============
+
+npm run lint  -> PASS
+npm run build -> PASS
+npm start     -> PASS
+GET /login    -> HTTP 200
+
+Ngày kiểm tra: 2026-07-07
