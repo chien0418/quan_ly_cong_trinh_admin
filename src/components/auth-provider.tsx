@@ -31,7 +31,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return null
     }
 
-    const next = data as Employee
+    const raw = data as Employee
+    const invalidAdminName =
+      raw.role === 'admin' &&
+      (!raw.display_name?.trim() ||
+        raw.display_name.trim() === '???' ||
+        raw.display_name.trim() === '？？？')
+    const next = invalidAdminName
+      ? { ...raw, display_name: '管理者' }
+      : raw
     setProfile(next)
     return next
   }, [])

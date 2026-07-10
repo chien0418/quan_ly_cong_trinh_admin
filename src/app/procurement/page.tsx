@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Copy, FileSpreadsheet, FolderPlus, PackagePlus, Plus, RefreshCw, Save, Search, Store, Trash2 } from 'lucide-react'
+import { Copy, FileSpreadsheet, FolderPlus, PackagePlus, Plus, Printer, RefreshCw, Save, Search, Store, Trash2 } from 'lucide-react'
 import { AdminShell } from '@/components/admin-shell'
 import { Modal } from '@/components/modal'
 import { PdfDropZone } from '@/components/pdf-drop-zone'
@@ -47,6 +47,19 @@ type OrderLineDraft = {
   note: string
 }
 type OrderWithMeta = PurchaseOrder & { projectName: string; lines: PurchaseOrderLine[] }
+type OrderChangeRow = {
+  id: string
+  purchase_order_id: string
+  change_order: number
+  change_type: 'added' | 'removed' | 'quantity_changed'
+  material_snapshot: string
+  item_name_snapshot: string
+  size_label_snapshot: string
+  unit_snapshot: string
+  note_snapshot: string | null
+  old_quantity: number | null
+  new_quantity: number | null
+}
 
 const sections: { key: SectionKey; label: string; subtitle: string }[] = [
   { key: 'takeoff', label: '拾い集計', subtitle: '拾い出し・数量表ファイル' },
@@ -102,10 +115,47 @@ function normalizeLines(lines: OrderLineDraft[]) {
   return filtered
 }
 
+function formatUnknownError(cause: unknown) {
+  if (cause instanceof Error) return cause.message
+
+  if (cause && typeof cause === 'object') {
+    const error = cause as {
+      message?: unknown
+      code?: unknown
+      details?: unknown
+      hint?: unknown
+    }
+
+    const parts = [
+      typeof error.message === 'string' ? error.message : '',
+      typeof error.code === 'string' && error.code ? `code: ${error.code}` : '',
+      typeof error.details === 'string' && error.details ? `details: ${error.details}` : '',
+      typeof error.hint === 'string' && error.hint ? `hint: ${error.hint}` : '',
+    ].filter(Boolean)
+
+    if (parts.length > 0) return parts.join(' / ')
+
+    try {
+      return JSON.stringify(cause)
+    } catch {
+      return '不明なエラーが発生しました。'
+    }
+  }
+
+  return String(cause)
+}
 function todayIso() {
-  const now = new Date()
-  const offset = now.getTimezoneOffset() * 60000
-  return new Date(now.getTime() - offset).toISOString().slice(0, 10)
+  const japanNow = new Date(Date.now() + 9 * 60 * 60 * 1000)
+  return japanNow.toISOString().slice(0, 10)
+}
+
+function escapeHtml(value: unknown) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;')
 }
 
 export default function ProcurementPage() {
@@ -119,6 +169,7 @@ export default function ProcurementPage() {
   const [materialItems, setMaterialItems] = useState<MaterialItemRow[]>([])
   const [materialSizes, setMaterialSizes] = useState<MaterialSizeRow[]>([])
   const [orders, setOrders] = useState<OrderWithMeta[]>([])
+  const [orderChanges, setOrderChanges] = useState<OrderChangeRow[]>([])
   const [takeoffFiles, setTakeoffFiles] = useState<TakeoffFileRow[]>([])
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -129,6 +180,7 @@ export default function ProcurementPage() {
   const [orderName, setOrderName] = useState('')
   const [selectedSupplierId, setSelectedSupplierId] = useState('')
   const [orderLines, setOrderLines] = useState<OrderLineDraft[]>([emptyLine()])
+  const [revisionSource, setRevisionSource] = useState<OrderWithMeta | null>(null)
 
   const [supplierModal, setSupplierModal] = useState(false)
   const [supplierForm, setSupplierForm] = useState({ projectId: '', name: '', person: '', phone: '', email: '', note: '' })
@@ -158,7 +210,7 @@ export default function ProcurementPage() {
     setError('')
     const supabase = createClient()
     try {
-      const [projectResult, supplierResult, groupResult, itemResult, sizeResult, orderResult, lineResult, takeoffResult] = await Promise.all([
+      const [projectResult, supplierResult, groupResult, itemResult, sizeResult, orderResult, lineResult, changeResult, takeoffResult] = await Promise.all([
         supabase.from('projects').select('*').is('deleted_at', null).order('created_at'),
         supabase.from('suppliers').select('*').order('supplier_name'),
         supabase.from('material_groups').select('*').eq('is_active', true).order('display_order').order('group_name'),
@@ -166,9 +218,10 @@ export default function ProcurementPage() {
         supabase.from('material_sizes').select('*').order('sort_order').order('size_label'),
         supabase.from('purchase_orders').select('*').order('order_date', { ascending: false }).order('created_at', { ascending: false }),
         supabase.from('purchase_order_lines').select('*').order('line_no'),
+        supabase.from('purchase_order_changes').select('*').order('change_order'),
         supabase.from('takeoff_files').select('*').eq('is_deleted', false).order('submitted_at', { ascending: false }),
       ])
-      for (const result of [projectResult, supplierResult, groupResult, itemResult, sizeResult, orderResult, lineResult, takeoffResult]) {
+      for (const result of [projectResult, supplierResult, groupResult, itemResult, sizeResult, orderResult, lineResult, changeResult, takeoffResult]) {
         if (result.error) throw result.error
       }
 
@@ -181,12 +234,13 @@ export default function ProcurementPage() {
       setMaterialGroups((groupResult.data ?? []) as MaterialGroupRow[])
       setMaterialItems((itemResult.data ?? []) as MaterialItemRow[])
       setMaterialSizes((sizeResult.data ?? []) as MaterialSizeRow[])
+      setOrderChanges((changeResult.data ?? []) as OrderChangeRow[])
       setTakeoffFiles((takeoffResult.data ?? []) as TakeoffFileRow[])
       setOrders(nextOrders.map((order) => ({ ...order, projectName: projectMap.get(order.project_id) ?? '削除済み工事', lines: lines.filter((line) => line.purchase_order_id === order.id) })))
       if (!selectedProjectId && nextProjects.length > 0) setSelectedProjectId(nextProjects[0].id)
       if (!takeoffProjectId && nextProjects.length > 0) setTakeoffProjectId(nextProjects[0].id)
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      setError(formatUnknownError(cause))
     } finally {
       setLoading(false)
     }
@@ -223,6 +277,157 @@ export default function ProcurementPage() {
     setError(nextError)
   }
 
+  function exportOrderPdf(order: OrderWithMeta) {
+    const printWindow = window.open('', '_blank', 'width=1200,height=900')
+    if (!printWindow) {
+      setMessage('', 'PDF出力画面を開けませんでした。ブラウザのポップアップ許可を確認してください。')
+      return
+    }
+
+    printWindow.opener = null
+
+    const sortedLines = [...order.lines].sort((a, b) => a.line_no - b.line_no)
+    const lineRows = sortedLines.map((line, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escapeHtml(line.material_snapshot || '—')}</td>
+        <td>${escapeHtml(line.item_name_snapshot || '—')}</td>
+        <td>${escapeHtml(line.size_label_snapshot || '—')}</td>
+        <td>${escapeHtml(line.quantity)}</td>
+        <td>${escapeHtml(line.unit_snapshot || '—')}</td>
+        <td>${escapeHtml(line.note || '—')}</td>
+      </tr>
+    `).join('')
+
+    const generatedAt = new Intl.DateTimeFormat('ja-JP', {
+      timeZone: 'Asia/Tokyo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    }).format(new Date())
+
+    const html = `<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>${escapeHtml(order.order_name)}_${escapeHtml(order.version_label)}</title>
+  <style>
+    @page { size: A4; margin: 14mm; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: #020617;
+      font-family: "Yu Gothic", "YuGothic", "Meiryo", "Noto Sans JP", sans-serif;
+      font-size: 11px;
+      font-weight: 500;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .top {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .company { font-weight: 800; font-size: 15px; }
+    .generated { color: #334155; font-size: 9px; font-weight: 700; }
+    h1 {
+      text-align: center;
+      font-size: 24px;
+      margin: 12px 0 18px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: 120px 1fr;
+      border: 1.2px solid #475569;
+      border-bottom: 0;
+      margin-bottom: 18px;
+    }
+    .summary dt, .summary dd {
+      margin: 0;
+      padding: 7px 9px;
+      border-bottom: 1.2px solid #475569;
+    }
+    .summary dt {
+      background: #f1f5f9;
+      font-weight: 700;
+      border-right: 1px solid #94a3b8;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+    th, td {
+      border: 1.2px solid #334155;
+      padding: 6px 5px;
+      vertical-align: middle;
+      word-break: break-word;
+    }
+    th {
+      background: #cbd5e1;
+      color: #020617;
+      text-align: center;
+      font-weight: 900;
+    }
+    td:nth-child(1),
+    td:nth-child(4),
+    td:nth-child(5),
+    td:nth-child(6) { text-align: center; }
+    th:nth-child(1) { width: 6%; }
+    th:nth-child(2) { width: 11%; }
+    th:nth-child(3) { width: 22%; }
+    th:nth-child(4) { width: 14%; }
+    th:nth-child(5) { width: 10%; }
+    th:nth-child(6) { width: 9%; }
+    th:nth-child(7) { width: 28%; }
+    .revision {
+      margin-top: 14px;
+      border: 1px solid #f97316;
+      background: #fff7ed;
+      padding: 9px;
+    }
+  </style>
+</head>
+<body>
+  <div class="top">
+    <div class="company">㈱カレントサービス</div>
+    <div class="generated">PDF出力：${escapeHtml(generatedAt)} JST</div>
+  </div>
+  <h1>${escapeHtml(order.order_name || '注文書')}</h1>
+  <dl class="summary">
+    <dt>工事名</dt><dd>${escapeHtml(order.projectName)}</dd>
+    <dt>発注先</dt><dd>${escapeHtml(order.supplier_name_snapshot)}</dd>
+    <dt>注文者</dt><dd>${escapeHtml(order.ordered_by_name_snapshot)}</dd>
+    <dt>注文日</dt><dd>${escapeHtml(formatDate(order.order_date))}</dd>
+    <dt>バージョン</dt><dd>${escapeHtml(order.version_label)}</dd>
+    <dt>発注状態</dt><dd>${order.status === 'issued' ? '発注済み' : order.status === 'cancelled' ? '取消' : '未発注'}</dd>
+  </dl>
+  <table>
+    <thead>
+      <tr><th>No.</th><th>材質</th><th>品名</th><th>サイズ</th><th>数量</th><th>単位</th><th>備考</th></tr>
+    </thead>
+    <tbody>${lineRows}</tbody>
+  </table>
+  ${order.revision_reason ? `<div class="revision"><strong>修正理由：</strong>${escapeHtml(order.revision_reason)}</div>` : ''}
+  <script>
+    window.addEventListener('load', () => {
+      setTimeout(() => {
+        window.focus()
+        window.print()
+      }, 250)
+    })
+  </script>
+</body>
+</html>`
+
+    printWindow.document.open()
+    printWindow.document.write(html)
+    printWindow.document.close()
+  }
+
   function updateLine(index: number, patch: Partial<OrderLineDraft>) {
     setOrderLines((current) => normalizeLines(current.map((line, currentIndex) => currentIndex === index ? { ...line, ...patch } : line)))
   }
@@ -246,11 +451,33 @@ export default function ProcurementPage() {
     })
   }
 
+  function orderLinePayload(lines: OrderLineDraft[]) {
+    return lines.filter(lineComplete).map((line) => ({
+      material_item_id: line.materialItemId,
+      material_size_id: line.materialSizeId || null,
+      material_snapshot: line.material,
+      item_name_snapshot: line.itemName,
+      size_label_snapshot: line.sizeLabel,
+      quantity: Number(line.quantity),
+      unit_snapshot: line.unit,
+      note: line.note.trim() || null,
+    }))
+  }
+
+  function clearOrderEditor() {
+    setOrderName('')
+    setSelectedSupplierId('')
+    setOrderLines([emptyLine()])
+    setRevisionSource(null)
+  }
+
   async function saveOrder() {
     if (!canEdit || saving || !profile) return
     setMessage()
+
     const supplier = suppliers.find((item) => item.id === selectedSupplierId)
     const completed = orderLines.filter(lineComplete)
+
     if (!selectedProjectId) return setMessage('', '工事を選択してください。')
     if (!orderName.trim()) return setMessage('', '注文名を入力してください。')
     if (!supplier) return setMessage('', '発注先を選択してください。')
@@ -258,7 +485,25 @@ export default function ProcurementPage() {
 
     setSaving(true)
     const supabase = createClient()
+
     try {
+      if (revisionSource) {
+        const revisionResult = await supabase.rpc('create_purchase_order_revision', {
+          p_source_order_id: revisionSource.id,
+          p_order_name: orderName.trim(),
+          p_supplier_id: supplier.id,
+          p_supplier_name_snapshot: supplier.supplier_name,
+          p_lines: orderLinePayload(orderLines),
+        })
+        if (revisionResult.error) throw revisionResult.error
+
+        clearOrderEditor()
+        setSection('history')
+        setMessage('新しい修正版を作成しました。元の版は変更されていません。')
+        await load()
+        return
+      }
+
       const header = await supabase.from('purchase_orders').insert({
         project_id: selectedProjectId,
         order_name: orderName.trim(),
@@ -275,46 +520,157 @@ export default function ProcurementPage() {
       }).select('*').single()
       if (header.error) throw header.error
 
-      const lineInsert = await supabase.from('purchase_order_lines').insert(completed.map((line, index) => ({
-        purchase_order_id: header.data.id,
-        line_no: index + 1,
-        material_item_id: line.materialItemId,
-        material_size_id: line.materialSizeId || null,
-        material_snapshot: line.material,
-        item_name_snapshot: line.itemName,
-        size_label_snapshot: line.sizeLabel,
-        quantity: Number(line.quantity),
-        unit_snapshot: line.unit,
-        note: line.note.trim() || null,
-      })))
+      const lineInsert = await supabase.from('purchase_order_lines').insert(
+        completed.map((line, index) => ({
+          purchase_order_id: header.data.id,
+          line_no: index + 1,
+          material_item_id: line.materialItemId,
+          material_size_id: line.materialSizeId || null,
+          material_snapshot: line.material,
+          item_name_snapshot: line.itemName,
+          size_label_snapshot: line.sizeLabel,
+          quantity: Number(line.quantity),
+          unit_snapshot: line.unit,
+          note: line.note.trim() || null,
+        })),
+      )
+
       if (lineInsert.error) {
         await supabase.from('purchase_orders').delete().eq('id', header.data.id)
         throw lineInsert.error
       }
+
       await supabase.from('update_logs').insert({
         project_id: selectedProjectId,
         target_table: 'purchase_orders',
         target_id: header.data.id,
         action: 'insert',
         field_name: 'order_name',
-        new_value: { order_name: orderName.trim(), supplier: supplier.supplier_name, line_count: completed.length },
+        new_value: {
+          order_name: orderName.trim(),
+          supplier: supplier.supplier_name,
+          line_count: completed.length,
+        },
         actor_employee_id: profile.id,
         actor_name_snapshot: profile.display_name,
       })
 
-      setOrderName('')
-      setSelectedSupplierId('')
-      setOrderLines([emptyLine()])
+      clearOrderEditor()
       setSection('history')
-      setMessage('注文書を保存しました。')
+      setMessage('注文書の初版を保存しました。')
       await load()
     } catch (cause) {
-      setMessage('', cause instanceof Error ? cause.message : String(cause))
+      setMessage('', formatUnknownError(cause))
     } finally {
       setSaving(false)
     }
   }
 
+  function startRevision(order: OrderWithMeta) {
+    if (!canEdit || order.status === 'cancelled') return
+
+    setSelectedProjectId(order.project_id)
+    setOrderName(order.order_name)
+    setSelectedSupplierId(order.supplier_id ?? '')
+    setOrderLines(
+      [...order.lines]
+        .sort((a, b) => a.line_no - b.line_no)
+        .map((line) => ({
+          key: createLineKey(),
+          material: line.material_snapshot,
+          materialItemId: line.material_item_id ?? '',
+          materialSizeId: line.material_size_id ?? '',
+          itemName: line.item_name_snapshot,
+          sizeLabel: line.size_label_snapshot,
+          quantity: String(line.quantity),
+          unit: line.unit_snapshot,
+          note: line.note ?? '',
+        }))
+        .concat(emptyLine()),
+    )
+    setRevisionSource(order)
+    setSelectedOrder(null)
+    setSection('create')
+    setMessage(
+      `${order.version_label} を元に新しい修正版を作成します。保存しても元の版は変更されません。`,
+    )
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  async function markOrderIssued(order: OrderWithMeta) {
+    if (!canEdit || saving || order.status !== 'draft') return
+
+    if (!window.confirm(
+      `「${order.order_name} / ${order.version_label}」を発注済みにしますか？`,
+    )) return
+
+    setSaving(true)
+    setMessage()
+    const supabase = createClient()
+
+    try {
+      const result = await supabase.rpc('mark_purchase_order_issued', {
+        p_order_id: order.id,
+      })
+      if (result.error) throw result.error
+
+      setSelectedOrder(null)
+      setMessage(`${order.version_label} を発注済みにしました。`)
+      await load()
+    } catch (cause) {
+      setMessage('', formatUnknownError(cause))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function changesForOrder(orderId: string) {
+    return orderChanges
+      .filter((change) => change.purchase_order_id === orderId)
+      .sort((a, b) => a.change_order - b.change_order)
+  }
+
+  function changeText(change: OrderChangeRow) {
+    const material = [change.material_snapshot, change.item_name_snapshot, change.size_label_snapshot]
+      .filter(Boolean)
+      .join(' / ')
+
+    if (change.change_type === 'added') {
+      return `追加：${material} ${change.new_quantity ?? '—'} ${change.unit_snapshot}`
+    }
+    if (change.change_type === 'removed') {
+      return `削除：${material} ${change.old_quantity ?? '—'} ${change.unit_snapshot}`
+    }
+    return `数量変更：${material} ${change.old_quantity ?? '—'} → ${change.new_quantity ?? '—'} ${change.unit_snapshot}`
+  }
+  async function deleteOrderHistory(order: OrderWithMeta) {
+    if (!canAdmin || saving) return
+
+    const confirmed = window.confirm(
+      `「${order.order_name} / ${order.version_label}」の履歴を削除しますか？\n画面から非表示になります。`,
+    )
+    if (!confirmed) return
+
+    setSaving(true)
+    setMessage()
+    const supabase = createClient()
+
+    try {
+      const result = await supabase.rpc(
+        'admin_delete_purchase_order_history',
+        { p_order_id: order.id },
+      )
+      if (result.error) throw result.error
+
+      setSelectedOrder(null)
+      setMessage(`${order.version_label} の履歴を削除しました。`)
+      await load()
+    } catch (cause) {
+      setMessage('', formatUnknownError(cause))
+    } finally {
+      setSaving(false)
+    }
+  }
   async function addSupplier() {
     if (!canEdit || !profile || !supplierForm.name.trim()) return
     setSaving(true)
@@ -337,7 +693,7 @@ export default function ProcurementPage() {
       setMessage('発注先を追加しました。')
       await load()
     } catch (cause) {
-      setMessage('', cause instanceof Error ? cause.message : String(cause))
+      setMessage('', formatUnknownError(cause))
     } finally {
       setSaving(false)
     }
@@ -394,7 +750,7 @@ export default function ProcurementPage() {
       setMessage('物資を削除しました。既存の注文履歴は保持されています。')
       await load()
     } catch (cause) {
-      setMessage('', cause instanceof Error ? cause.message : String(cause))
+      setMessage('', formatUnknownError(cause))
     } finally {
       setSaving(false)
     }
@@ -446,7 +802,7 @@ export default function ProcurementPage() {
       setMessage('物資グループを作成しました。')
       await load()
     } catch (cause) {
-      setMessage('', cause instanceof Error ? cause.message : String(cause))
+      setMessage('', formatUnknownError(cause))
     } finally {
       setSaving(false)
     }
@@ -566,7 +922,7 @@ export default function ProcurementPage() {
       setMessage(materialForm.item ? '物資マスターを更新しました。' : materialModalMode === 'copy' ? '物資をコピーして追加しました。' : '物資マスターを追加しました。')
       await load()
     } catch (cause) {
-      setMessage('', cause instanceof Error ? cause.message : String(cause))
+      setMessage('', formatUnknownError(cause))
     } finally {
       setSaving(false)
     }
@@ -603,7 +959,7 @@ export default function ProcurementPage() {
       setMessage('拾い集計ファイルを登録しました。')
       await load()
     } catch (cause) {
-      setMessage('', cause instanceof Error ? cause.message : String(cause))
+      setMessage('', formatUnknownError(cause))
     } finally {
       setSaving(false)
     }
@@ -636,7 +992,16 @@ export default function ProcurementPage() {
       {section === 'create' && (
         <>
           <div className="panel procurement-order-info">
-            <div className="panel-header"><div><h2>注文情報</h2><p>工事・注文名・発注先を選択してから注文明細を入力します。</p></div><button className="soft-button" onClick={() => void load()}><RefreshCw size={16} />再読込</button></div>
+            <div className="panel-header">
+              <div>
+                <h2>{revisionSource ? `修正版作成：${revisionSource.version_label} から` : '注文情報'}</h2>
+                <p>{revisionSource ? '保存すると新しい版が作成されます。元の版は変更・削除されません。' : '工事・注文名・発注先を選択してから注文明細を入力します。'}</p>
+              </div>
+              <div className="material-header-actions">
+                {revisionSource && <button className="ghost-button" onClick={clearOrderEditor}>修正を中止</button>}
+                <button className="soft-button" onClick={() => void load()}><RefreshCw size={16} />再読込</button>
+              </div>
+            </div>
             <div className="form-grid">
               <div className="form-field"><label>工事</label><select value={selectedProjectId} onChange={(event) => { setSelectedProjectId(event.target.value); setSelectedSupplierId('') }} disabled={!canEdit}>{projects.map((project) => <option key={project.id} value={project.id}>{project.display_name}</option>)}</select></div>
               <div className="form-field"><label>注文名</label><input value={orderName} onChange={(event) => setOrderName(event.target.value)} placeholder="例：1F RO配管材料" disabled={!canEdit} /></div>
@@ -669,7 +1034,7 @@ export default function ProcurementPage() {
                 </tbody>
               </table>
             </div>
-            <div className="form-actions"><button className="primary-button" onClick={() => void saveOrder()} disabled={!canEdit || saving}><Save size={17} />{saving ? '保存中...' : '保存'}</button></div>
+            <div className="form-actions"><button className="primary-button" onClick={() => void saveOrder()} disabled={!canEdit || saving}><Save size={17} />{saving ? '保存中...' : revisionSource ? '新しい修正版を保存' : '初版を保存'}</button></div>
           </div>
         </>
       )}
@@ -734,12 +1099,102 @@ export default function ProcurementPage() {
 
       {section === 'history' && (
         <div className="panel">
-          <div className="panel-header"><div><h2>注文履歴</h2><p>保存した注文書を版・改訂履歴として確認します。</p></div></div>
-          <div className="toolbar"><div className="search-box"><Search size={18} /><input value={historyQuery} onChange={(event) => setHistoryQuery(event.target.value)} placeholder="工事名・注文名・発注先・材料を検索" /></div></div>
-          <div className="table-wrap"><table className="data-table order-table"><thead><tr><th>注文日</th><th>工事</th><th>注文名</th><th>発注先</th><th>注文者</th><th>版</th><th>状態</th><th>明細</th><th>詳細</th></tr></thead><tbody>{filteredHistory.map((order) => <tr key={order.id}><td>{formatDate(order.order_date)}</td><td>{order.projectName}</td><td><strong>{order.order_name}</strong></td><td>{order.supplier_name_snapshot}</td><td>{order.ordered_by_name_snapshot}</td><td>{order.version_label}</td><td>{order.status === 'issued' ? '発注済み' : order.status === 'cancelled' ? '取消' : '下書き'}</td><td>{order.lines.length}件</td><td><button className="soft-button compact-action" onClick={() => setSelectedOrder(order)}>詳細</button></td></tr>)}{!loading && filteredHistory.length === 0 && <tr><td colSpan={9}><div className="empty-state">注文履歴はまだありません。</div></td></tr>}</tbody></table></div>
+          <div className="panel-header">
+            <div>
+              <h2>注文履歴</h2>
+              <p>修正は新しい版として保存され、過去の版は変更されません。</p>
+            </div>
+          </div>
+
+          <div className="toolbar">
+            <div className="search-box">
+              <Search size={18} />
+              <input
+                value={historyQuery}
+                onChange={(event) => setHistoryQuery(event.target.value)}
+                placeholder="工事名・注文名・発注先・材料を検索"
+              />
+            </div>
+          </div>
+
+          <div className="table-wrap">
+            <table className="data-table order-table">
+              <thead>
+                <tr>
+                  <th>注文日</th>
+                  <th>工事</th>
+                  <th>注文名</th>
+                  <th>発注先</th>
+                  <th>注文者</th>
+                  <th>版</th>
+                  <th>状態</th>
+                  <th>変更内容</th>
+                  <th>操作</th>
+                  <th>PDF</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredHistory.map((order) => {
+                  const changes = changesForOrder(order.id)
+                  return (
+                    <tr key={order.id}>
+                      <td>{formatDate(order.order_date)}</td>
+                      <td>{order.projectName}</td>
+                      <td><strong>{order.order_name}</strong></td>
+                      <td>{order.supplier_name_snapshot}</td>
+                      <td>{order.ordered_by_name_snapshot}</td>
+                      <td><strong>{order.version_label}</strong></td>
+                      <td>
+                        <strong>
+                          {order.status === 'issued'
+                            ? '発注済み'
+                            : order.status === 'cancelled'
+                              ? '取消'
+                              : '未発注'}
+                        </strong>
+                      </td>
+                      <td>
+                        {order.revision_no === 0 && <span>新規作成</span>}
+                        {changes.length > 0 && (
+                          <div>
+                            {changes.map((change) => (
+                              <div key={change.id}>{changeText(change)}</div>
+                            ))}
+                          </div>
+                        )}
+                        {order.revision_no > 0 && changes.length === 0 && <span>変更なし</span>}
+                      </td>
+                      <td>
+                        <div className="material-row-actions">
+                          <button className="soft-button compact-action" onClick={() => setSelectedOrder(order)}>詳細</button>
+                          {order.status !== 'cancelled' && canEdit && (
+                            <button className="soft-button compact-action" onClick={() => startRevision(order)}>修正版作成</button>
+                          )}
+                          {order.status === 'draft' && canEdit && (
+                            <button className="primary-button compact-action" onClick={() => void markOrderIssued(order)} disabled={saving}>
+                              発注済みにする
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                      <td>
+                        {canAdmin && <button className="danger-button compact-action" onClick={() => void deleteOrderHistory(order)} disabled={saving}><Trash2 size={14} />履歴削除</button>}<button className="soft-button compact-action" onClick={() => exportOrderPdf(order)}>
+                          <Printer size={14} />PDF出力
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+                {!loading && filteredHistory.length === 0 && (
+                  <tr>
+                    <td colSpan={10}><div className="empty-state">注文履歴はまだありません。</div></td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
-
       {section === 'takeoff' && (
         <div className="panel">
           <div className="panel-header"><div><h2>拾い集計</h2><p>拾い出し・数量表ファイルを工事ごとに保存します。</p></div></div>
@@ -838,8 +1293,84 @@ export default function ProcurementPage() {
         <div className="form-actions"><button className="ghost-button" onClick={() => setMaterialModal(false)}>キャンセル</button><button className="primary-button" onClick={() => void saveMaterial()} disabled={saving}>保存</button></div>
       </Modal>
 
-      <Modal open={Boolean(selectedOrder)} title={selectedOrder ? `${selectedOrder.order_name} / ${selectedOrder.version_label}` : '注文書詳細'} onClose={() => setSelectedOrder(null)}>
-        {selectedOrder && <div className="order-detail-stack"><div className="order-summary-grid"><div><span>工事</span><strong>{selectedOrder.projectName}</strong></div><div><span>注文日</span><strong>{formatDate(selectedOrder.order_date)}</strong></div><div><span>発注先</span><strong>{selectedOrder.supplier_name_snapshot}</strong></div><div><span>注文者</span><strong>{selectedOrder.ordered_by_name_snapshot}</strong></div><div><span>版</span><strong>{selectedOrder.version_label}</strong></div><div><span>状態</span><strong>{selectedOrder.status === 'issued' ? '発注済み' : selectedOrder.status === 'cancelled' ? '取消' : '下書き'}</strong></div></div><div className="table-wrap"><table className="data-table order-line-table"><thead><tr><th>No.</th><th>材質</th><th>品名</th><th>サイズ</th><th>数量</th><th>単位</th><th>備考</th></tr></thead><tbody>{selectedOrder.lines.map((line) => <tr key={line.id}><td>{line.line_no}</td><td>{line.material_snapshot}</td><td>{line.item_name_snapshot}</td><td>{line.size_label_snapshot}</td><td>{line.quantity}</td><td>{line.unit_snapshot}</td><td>{line.note ?? '—'}</td></tr>)}</tbody></table></div></div>}
+      <Modal
+        open={Boolean(selectedOrder)}
+        title={selectedOrder ? `${selectedOrder.order_name} / ${selectedOrder.version_label}` : '注文書詳細'}
+        onClose={() => setSelectedOrder(null)}
+      >
+        {selectedOrder && (
+          <div className="order-detail-stack">
+            <div className="order-summary-grid">
+              <div><span>工事</span><strong>{selectedOrder.projectName}</strong></div>
+              <div><span>注文日</span><strong>{formatDate(selectedOrder.order_date)}</strong></div>
+              <div><span>発注先</span><strong>{selectedOrder.supplier_name_snapshot}</strong></div>
+              <div><span>注文者</span><strong>{selectedOrder.ordered_by_name_snapshot}</strong></div>
+              <div><span>版</span><strong>{selectedOrder.version_label}</strong></div>
+              <div>
+                <span>状態</span>
+                <strong>
+                  {selectedOrder.status === 'issued'
+                    ? '発注済み'
+                    : selectedOrder.status === 'cancelled'
+                      ? '取消'
+                      : '未発注'}
+                </strong>
+              </div>
+            </div>
+
+            {selectedOrder.revision_no > 0 && (
+              <div className="panel">
+                <h3>変更内容</h3>
+                {changesForOrder(selectedOrder.id).length === 0 ? (
+                  <p>変更なし</p>
+                ) : (
+                  <div>
+                    {changesForOrder(selectedOrder.id).map((change) => (
+                      <div key={change.id}>{changeText(change)}</div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="table-wrap">
+              <table className="data-table order-line-table">
+                <thead>
+                  <tr><th>No.</th><th>材質</th><th>品名</th><th>サイズ</th><th>数量</th><th>単位</th><th>備考</th></tr>
+                </thead>
+                <tbody>
+                  {[...selectedOrder.lines]
+                    .sort((a, b) => a.line_no - b.line_no)
+                    .map((line, index) => (
+                      <tr key={line.id}>
+                        <td>{index + 1}</td>
+                        <td>{line.material_snapshot}</td>
+                        <td>{line.item_name_snapshot}</td>
+                        <td>{line.size_label_snapshot}</td>
+                        <td>{line.quantity}</td>
+                        <td>{line.unit_snapshot}</td>
+                        <td>{line.note ?? '—'}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="form-actions">
+              {selectedOrder.status !== 'cancelled' && canEdit && (
+                <button className="soft-button" onClick={() => startRevision(selectedOrder)}>修正版作成</button>
+              )}
+              {selectedOrder.status === 'draft' && canEdit && (
+                <button className="primary-button" onClick={() => void markOrderIssued(selectedOrder)} disabled={saving}>
+                  発注済みにする
+                </button>
+              )}
+              <button className="soft-button" onClick={() => exportOrderPdf(selectedOrder)}>
+                <Printer size={17} />PDF出力
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
     </AdminShell>
   )
