@@ -236,3 +236,30 @@ export type TakeoffFileRow = {
   created_at: string
   updated_at: string
 }
+
+export type ScheduleEntry = {
+  id: string
+  project_id: string | null
+  work_name: string
+  work_content: string | null
+  assignee_name: string | null
+  start_date: string
+  end_date: string
+  start_time: string
+  end_time: string
+  schedule_scope: 'day' | 'week_month' | 'year'
+  status: 'planned' | 'in_progress' | 'completed' | 'on_hold'
+  color: string
+  note: string | null
+  created_by: string | null
+  updated_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+export type ScheduleEntryEmployee = {
+  schedule_entry_id: string
+  employee_id: string
+  is_primary: boolean
+  position: number
+}

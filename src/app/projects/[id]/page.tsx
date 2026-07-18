@@ -40,6 +40,7 @@ export default function ProjectDetailPage() {
   const params = useParams<{ id: string }>()
   const projectId = params.id
   const { profile } = useAuth()
+  const canEdit = profile?.role === 'admin' || profile?.role === 'editor'
   const [project, setProject] = useState<Project | null>(null)
   const [steps, setSteps] = useState<WorkflowStep[]>([])
   const [documents, setDocuments] = useState<DocumentRow[]>([])
@@ -109,11 +110,13 @@ export default function ProjectDetailPage() {
   useEffect(() => { if (projectId) void load() }, [projectId, load])
 
   function openAddStep() {
+    if (!canEdit) return
     setEditingStep(emptyStep(projectId, steps.length + 1))
     setStepModal(true)
   }
 
   function openEditStep(step: WorkflowStep) {
+    if (!canEdit) return
     setEditingStep({ ...step, detail: { ...(step.detail ?? {}) } })
     setStepModal(true)
   }
@@ -150,6 +153,7 @@ export default function ProjectDetailPage() {
           profileId={profile?.id ?? ''}
           profileName={profile?.display_name ?? ''}
           steps={steps}
+          canEdit={canEdit}
           onEdit={openEditStep}
           onAdd={openAddStep}
           onReload={load}
@@ -162,6 +166,7 @@ export default function ProjectDetailPage() {
           profileId={profile?.id ?? ''}
           steps={steps}
           documents={documents}
+          canEdit={canEdit}
           onReload={load}
           onError={setError}
         />
@@ -173,6 +178,7 @@ export default function ProjectDetailPage() {
           steps={steps}
           folders={drawingFolders}
           files={drawingFiles}
+          canEdit={canEdit}
           onReload={load}
           onError={setError}
         />
@@ -181,7 +187,7 @@ export default function ProjectDetailPage() {
 
       <StepEditor
         key={editingStep?.id || `new-${editingStep?.display_order ?? 0}`}
-        open={stepModal}
+        open={stepModal && canEdit}
         step={editingStep}
         profileId={profile?.id ?? ''}
         profileName={profile?.display_name ?? ''}
@@ -198,19 +204,21 @@ export default function ProjectDetailPage() {
 }
 
 function WorkflowPanel({
-  project, projectId, profileId, profileName, steps, onEdit, onAdd, onReload, onError,
+  project, projectId, profileId, profileName, steps, canEdit, onEdit, onAdd, onReload, onError,
 }: {
   project: Project | null
   projectId: string
   profileId: string
   profileName: string
   steps: WorkflowStep[]
+  canEdit: boolean
   onEdit: (step: WorkflowStep) => void
   onAdd: () => void
   onReload: () => Promise<void>
   onError: (value: string) => void
 }) {
   async function remove(step: WorkflowStep) {
+    if (!canEdit) return
     if (!confirm(`「${step.title}」を削除しますか？`)) return
     const supabase = createClient()
     const result = await supabase.from('workflow_steps').update({ is_active: false, updated_by: profileId }).eq('id', step.id)
@@ -226,7 +234,7 @@ function WorkflowPanel({
     <div className="panel">
       <div className="panel-header">
         <div><h2>工程一覧</h2><p>{project?.display_name} の工程をWebから編集</p></div>
-        <button className="primary-button" onClick={onAdd}><Plus size={18} />工程追加</button>
+        {canEdit && <button className="primary-button" onClick={onAdd}><Plus size={18} />工程追加</button>}
       </div>
       <div className="table-wrap">
         <table className="data-table">
@@ -244,7 +252,7 @@ function WorkflowPanel({
                   <td>{step.current_ball_text ?? '—'}</td>
                   <td>{formatDate(step.planned_at)}</td>
                   <td>{formatDate(step.completed_at)}</td>
-                  <td><div className="table-actions"><button className="icon-button" onClick={() => onEdit(step)}><Edit3 size={17} /></button><button className="icon-button danger" onClick={() => void remove(step)}><Trash2 size={17} /></button></div></td>
+                  <td>{canEdit ? <div className="table-actions"><button className="icon-button" onClick={() => onEdit(step)}><Edit3 size={17} /></button><button className="icon-button danger" onClick={() => void remove(step)}><Trash2 size={17} /></button></div> : '—'}</td>
                 </tr>
               )
             })}
@@ -338,18 +346,36 @@ function StepEditor({ open, step, profileId, profileName, documents, checklistIt
   }
 
   function addChecklistItem() {
+    const currentForm = form
+    if (!currentForm) return
+
     const label = newChecklistLabel.trim()
-    if (!label || checklistDraft.some((item) => item.label === label)) return
-    setChecklistDraft((items) => [...items, {
-      id: `local-${Date.now()}`,
-      workflow_step_id: step?.id ?? '',
-      label,
-      is_checked: false,
-      display_order: items.length,
-      checked_by: null,
-      checked_at: null,
-    }])
+
+    if (!label) {
+      onError('チェック項目名を入力してください。')
+      return
+    }
+
+    if (checklistDraft.some((item) => item.label === label)) {
+      onError(`「${label}」は既に確認項目にあります。`)
+      return
+    }
+
+    setChecklistDraft((items) => [
+      ...items,
+      {
+        id: `local-${Date.now()}`,
+        workflow_step_id: currentForm.id,
+        label,
+        is_checked: false,
+        display_order: items.length,
+        checked_by: null,
+        checked_at: null,
+      },
+    ])
+
     setNewChecklistLabel('')
+    onError('')
   }
 
   async function uploadStepPdfs() {
@@ -558,8 +584,28 @@ function StepEditor({ open, step, profileId, profileName, documents, checklistIt
                   {checklistDraft.length === 0 && <div className="step-pdf-disabled-note">チェック項目がありません。</div>}
                 </div>
                 <div className="workflow-checklist-add">
-                  <input value={newChecklistLabel} onChange={(e) => setNewChecklistLabel(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addChecklistItem() } }} placeholder="チェック項目名" />
-                  <button type="button" className="soft-button" onClick={addChecklistItem}><Plus size={17} />項目追加</button>
+                  <input
+                    value={newChecklistLabel}
+                    onChange={(e) => setNewChecklistLabel(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault()
+                        addChecklistItem()
+                      }
+                    }}
+                    placeholder="チェック項目名"
+                  />
+                  <button
+                    type="button"
+                    className="soft-button"
+                    onClick={addChecklistItem}
+                  >
+                    <Plus size={17} />
+                    項目追加
+                  </button>
+                  <small className="form-hint" style={{ gridColumn: '1 / -1' }}>
+                    項目追加後、画面下の「保存」を押すと保存されます。
+                  </small>
                 </div>
               </section>
             )}
@@ -626,11 +672,12 @@ function StepEditor({ open, step, profileId, profileName, documents, checklistIt
 }
 
 
-function DocumentsPanel({ projectId, profileId, steps, documents, onReload, onError }: {
+function DocumentsPanel({ projectId, profileId, steps, documents, canEdit, onReload, onError }: {
   projectId: string
   profileId: string
   steps: WorkflowStep[]
   documents: DocumentRow[]
+  canEdit: boolean
   onReload: () => Promise<void>
   onError: (value: string) => void
 }) {
@@ -656,6 +703,7 @@ function DocumentsPanel({ projectId, profileId, steps, documents, onReload, onEr
 
   async function upload(event: FormEvent) {
     event.preventDefault()
+    if (!canEdit) return
     if (!file) return onError('PDFファイルを選択してください。')
     setUploading(true)
     const supabase = createClient()
@@ -702,6 +750,7 @@ function DocumentsPanel({ projectId, profileId, steps, documents, onReload, onEr
   }
 
   async function remove(document: DocumentRow) {
+    if (!canEdit) return
     if (!confirm(`「${document.file_name}」を削除しますか？`)) return
     const supabase = createClient()
     const update = await supabase.from('documents').update({ is_deleted: true }).eq('id', document.id)
@@ -715,7 +764,7 @@ function DocumentsPanel({ projectId, profileId, steps, documents, onReload, onEr
       <div className="panel">
         <div className="panel-header">
           <div><h2>資料PDF</h2><p>資料を工程に紐付けてSupabase Storageへ保存します。</p></div>
-          <button className="primary-button" onClick={() => setModalOpen(true)}><FileUp size={18} />資料追加</button>
+          {canEdit && <button className="primary-button" onClick={() => setModalOpen(true)}><FileUp size={18} />資料追加</button>}
         </div>
         <div className="table-wrap"><table className="data-table"><thead><tr><th>工程</th><th>種類</th><th>ファイル名</th><th>版</th><th>サイズ</th><th>登録日</th><th>操作</th></tr></thead><tbody>
           {documents.map((document) => <tr key={document.id}>
@@ -725,13 +774,13 @@ function DocumentsPanel({ projectId, profileId, steps, documents, onReload, onEr
             <td>{document.version_label}</td>
             <td>{humanBytes(document.file_size_bytes)}</td>
             <td>{formatDateTime(document.uploaded_at)}</td>
-            <td><div className="table-actions"><button className="icon-button" onClick={() => void openDocument(document)}><Download size={17} /></button><button className="icon-button danger" onClick={() => void remove(document)}><Trash2 size={17} /></button></div></td>
+            <td><div className="table-actions"><button className="icon-button" onClick={() => void openDocument(document)}><Download size={17} /></button>{canEdit && <button className="icon-button danger" onClick={() => void remove(document)}><Trash2 size={17} /></button>}</div></td>
           </tr>)}
           {documents.length === 0 && <tr><td colSpan={7}><div className="empty-state">資料がありません。</div></td></tr>}
         </tbody></table></div>
       </div>
 
-      <Modal open={modalOpen} title="資料追加" onClose={() => { setModalOpen(false); resetForm() }}>
+      <Modal open={modalOpen && canEdit} title="資料追加" onClose={() => { setModalOpen(false); resetForm() }}>
         <form onSubmit={upload}>
           <div className="form-grid">
             <div className="form-field full"><label>PDFファイル</label><PdfDropZone files={file ? [file] : []} onFiles={(files) => setFile(files[0] ?? null)} disabled={uploading} /></div>
@@ -748,12 +797,13 @@ function DocumentsPanel({ projectId, profileId, steps, documents, onReload, onEr
   )
 }
 
-function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, onError }: {
+function DrawingsPanel({ projectId, profileId, steps, folders, files, canEdit, onReload, onError }: {
   projectId: string
   profileId: string
   steps: WorkflowStep[]
   folders: DrawingFolder[]
   files: DrawingFile[]
+  canEdit: boolean
   onReload: () => Promise<void>
   onError: (value: string) => void
 }) {
@@ -772,6 +822,7 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
 
   async function createFolder(event: FormEvent) {
     event.preventDefault()
+    if (!canEdit) return
     if (!folderName.trim()) return onError('フォルダ名を入力してください。')
     setBusy(true)
     const supabase = createClient()
@@ -792,6 +843,7 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
   }
 
   function openUpload(folderId?: string) {
+    if (!canEdit) return
     setSelectedFolderId(folderId ?? folders[0]?.id ?? '')
     setWorkflowStepId('')
     setVersionLabel('初版')
@@ -802,6 +854,7 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
 
   async function uploadDrawing(event: FormEvent) {
     event.preventDefault()
+    if (!canEdit) return
     if (!selectedFolderId) return onError('図面フォルダを選択してください。')
     if (!file) return onError('図面PDFを選択してください。')
     setBusy(true)
@@ -844,6 +897,7 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
   }
 
   async function removeDrawing(drawing: DrawingFile) {
+    if (!canEdit) return
     if (!confirm(`「${drawing.file_name}」を削除しますか？`)) return
     const supabase = createClient()
     const update = await supabase.from('drawing_files').update({ is_deleted: true }).eq('id', drawing.id)
@@ -853,6 +907,7 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
   }
 
   async function removeFolder(folder: DrawingFolder) {
+    if (!canEdit) return
     const folderFiles = files.filter((item) => item.drawing_folder_id === folder.id)
     if (folderFiles.length > 0) return onError('図面が入っているフォルダは削除できません。先に図面を削除してください。')
     if (!confirm(`フォルダ「${folder.folder_name}」を削除しますか？`)) return
@@ -867,10 +922,10 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
       <div className="panel">
         <div className="panel-header">
           <div><h2>図面管理</h2><p>図面をフォルダ・工程・版で整理し、Supabase Storageで共有します。</p></div>
-          <div className="table-actions">
+          {canEdit && <div className="table-actions">
             <button className="soft-button" onClick={() => setFolderModal(true)}><FolderPlus size={18} />フォルダ追加</button>
             <button className="primary-button" onClick={() => openUpload()} disabled={folders.length === 0}><FileUp size={18} />図面追加</button>
-          </div>
+          </div>}
         </div>
 
         {folders.length === 0 && <div className="empty-state">図面フォルダがありません。まず「フォルダ追加」で分類を作成してください。</div>}
@@ -880,7 +935,7 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
             <div className="drawing-folder" key={folder.id}>
               <div className="drawing-folder-header">
                 <div><h3>{folder.folder_name}</h3>{folder.note && <p>{folder.note}</p>}</div>
-                <div className="table-actions"><button className="soft-button" onClick={() => openUpload(folder.id)}><Plus size={17} />図面追加</button><button className="icon-button danger" onClick={() => void removeFolder(folder)}><Trash2 size={17} /></button></div>
+                {canEdit && <div className="table-actions"><button className="soft-button" onClick={() => openUpload(folder.id)}><Plus size={17} />図面追加</button><button className="icon-button danger" onClick={() => void removeFolder(folder)}><Trash2 size={17} /></button></div>}
               </div>
               <div className="table-wrap"><table className="data-table"><thead><tr><th>工程</th><th>ファイル名</th><th>版</th><th>備考</th><th>登録日</th><th>操作</th></tr></thead><tbody>
                 {folderFiles.map((drawing) => <tr key={drawing.id}>
@@ -889,7 +944,7 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
                   <td>{drawing.version_label}</td>
                   <td>{drawing.note ?? '—'}</td>
                   <td>{formatDateTime(drawing.submitted_at)}</td>
-                  <td><div className="table-actions"><button className="icon-button" onClick={() => void openDrawing(drawing)}><Download size={17} /></button><button className="icon-button danger" onClick={() => void removeDrawing(drawing)}><Trash2 size={17} /></button></div></td>
+                  <td><div className="table-actions"><button className="icon-button" onClick={() => void openDrawing(drawing)}><Download size={17} /></button>{canEdit && <button className="icon-button danger" onClick={() => void removeDrawing(drawing)}><Trash2 size={17} /></button>}</div></td>
                 </tr>)}
                 {folderFiles.length === 0 && <tr><td colSpan={6}><div className="empty-state">このフォルダに図面がありません。</div></td></tr>}
               </tbody></table></div>
@@ -898,7 +953,7 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
         })}
       </div>
 
-      <Modal open={folderModal} title="図面フォルダ追加" onClose={() => setFolderModal(false)}>
+      <Modal open={folderModal && canEdit} title="図面フォルダ追加" onClose={() => setFolderModal(false)}>
         <form onSubmit={createFolder}>
           <div className="form-grid">
             <div className="form-field full"><label>フォルダ名</label><input value={folderName} onChange={(e) => setFolderName(e.target.value)} placeholder="例：客先図 / 製作図 / 施工図" /></div>
@@ -908,7 +963,7 @@ function DrawingsPanel({ projectId, profileId, steps, folders, files, onReload, 
         </form>
       </Modal>
 
-      <Modal open={uploadModal} title="図面追加" onClose={() => setUploadModal(false)}>
+      <Modal open={uploadModal && canEdit} title="図面追加" onClose={() => setUploadModal(false)}>
         <form onSubmit={uploadDrawing}>
           <div className="form-grid">
             <div className="form-field full"><label>図面PDF</label><PdfDropZone files={file ? [file] : []} onFiles={(files) => setFile(files[0] ?? null)} disabled={busy} title="図面PDFをここにドラッグ＆ドロップ" /></div>

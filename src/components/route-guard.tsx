@@ -7,7 +7,7 @@ import type { UserRole } from '@/lib/types'
 
 export function RouteGuard({
   children,
-  roles = ['admin', 'editor'],
+  roles = ['admin', 'editor', 'viewer'],
 }: {
   children: React.ReactNode
   roles?: UserRole[]

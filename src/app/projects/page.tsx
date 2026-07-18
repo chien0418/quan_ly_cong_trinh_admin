@@ -15,6 +15,7 @@ type ProjectWithProgress = Project & { completed: number; total: number; current
 
 export default function ProjectsPage() {
   const { profile } = useAuth()
+  const canEdit = profile?.role === 'admin' || profile?.role === 'editor'
   const [projects, setProjects] = useState<ProjectWithProgress[]>([])
   const [query, setQuery] = useState('')
   const [open, setOpen] = useState(false)
@@ -54,6 +55,7 @@ export default function ProjectsPage() {
   }
 
   function openCreate() {
+    if (!canEdit) return
     setEditProject(null)
     setName('')
     setDescription('')
@@ -61,6 +63,7 @@ export default function ProjectsPage() {
   }
 
   function openEdit(project: ProjectWithProgress) {
+    if (!canEdit) return
     setEditProject(project)
     setName(project.display_name)
     setDescription(project.description ?? '')
@@ -69,7 +72,7 @@ export default function ProjectsPage() {
 
   async function save(event: FormEvent) {
     event.preventDefault()
-    if (!profile) return
+    if (!profile || !canEdit) return
     if (!name.trim()) return setError('工事名を入力してください。')
     setBusy(true)
     setError('')
@@ -142,6 +145,7 @@ export default function ProjectsPage() {
   }
 
   async function remove(project: ProjectWithProgress) {
+    if (!canEdit) return
     if (!confirm(`「${project.display_name}」を削除しますか？`)) return
     const supabase = createClient()
     const result = await supabase.from('projects').update({ deleted_at: new Date().toISOString(), updated_by: profile?.id ?? null }).eq('id', project.id)
@@ -160,7 +164,7 @@ export default function ProjectsPage() {
       <div className="panel">
         <div className="panel-header">
           <div><h2>工事一覧</h2><p>Webで追加・編集した内容はSupabaseへ即時保存されます。</p></div>
-          <button className="primary-button" onClick={openCreate}><Plus size={18} />新規工事追加</button>
+          {canEdit && <button className="primary-button" onClick={openCreate}><Plus size={18} />新規工事追加</button>}
         </div>
         <div className="toolbar">
           <div className="search-box"><Search size={18} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="工事名を検索" /></div>
@@ -177,10 +181,10 @@ export default function ProjectsPage() {
                   <td>{project.ball ?? '—'}</td>
                   <td>{project.completed}/{project.total}</td>
                   <td>{formatDate(project.created_at)}</td>
-                  <td><div className="table-actions">
+                  <td>{canEdit ? <div className="table-actions">
                     <button className="icon-button" onClick={() => openEdit(project)} title="編集"><Edit3 size={17} /></button>
                     <button className="icon-button danger" onClick={() => void remove(project)} title="削除"><Trash2 size={17} /></button>
-                  </div></td>
+                  </div> : '—'}</td>
                 </tr>
               ))}
               {filtered.length === 0 && <tr><td colSpan={6}><div className="empty-state">工事データがありません。</div></td></tr>}
@@ -189,7 +193,7 @@ export default function ProjectsPage() {
         </div>
       </div>
 
-      <Modal open={open} title={editProject ? '工事情報編集' : '新規工事追加'} onClose={() => setOpen(false)}>
+      <Modal open={open && canEdit} title={editProject ? '工事情報編集' : '新規工事追加'} onClose={() => setOpen(false)}>
         <form onSubmit={save}>
           <div className="form-grid">
             <div className="form-field full"><label>工事名</label><input value={name} onChange={(e) => setName(e.target.value)} /></div>

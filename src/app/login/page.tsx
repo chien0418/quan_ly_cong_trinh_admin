@@ -16,7 +16,7 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false)
 
   useEffect(() => {
-    if (profile && !profile.must_change_password && ['admin', 'editor'].includes(profile.role)) {
+    if (profile && !profile.must_change_password && ['admin', 'editor', 'viewer'].includes(profile.role)) {
       router.replace('/dashboard')
     }
   }, [profile, router])
@@ -75,9 +75,9 @@ export default function LoginPage() {
         await supabase.auth.signOut()
         throw new Error('この社員コードは利用停止中です。')
       }
-      if (!['admin', 'editor'].includes(next.role)) {
+      if (!['admin', 'editor', 'viewer'].includes(next.role)) {
         await supabase.auth.signOut()
-        throw new Error('Web管理画面は管理者または編集者のみ利用できます。')
+        throw new Error('このアカウントではWeb画面を利用できません。')
       }
 
       await refreshProfile()
@@ -94,7 +94,7 @@ export default function LoginPage() {
       <section className="login-hero">
         <div className="hero-badge">
           <span>CURRENT SERVICE</span>
-          <strong>工程進捗管理</strong>
+          <strong>現場管理</strong>
           <b>Web Admin</b>
         </div>
         <div>
