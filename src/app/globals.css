@@ -42,6 +42,26 @@ button { cursor: pointer; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .admin-layout { min-height: 100vh; display: grid; grid-template-columns: 258px minmax(0, 1fr); }
+.admin-layout.sidebar-hidden { grid-template-columns: minmax(0, 1fr); }
+.admin-layout.sidebar-hidden .sidebar { display: none; }
+.admin-layout.sidebar-hidden .main-area { padding-left: 58px; }
+.sidebar-toggle-button {
+  position: fixed;
+  top: 16px;
+  left: 232px;
+  z-index: 60;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #aec6de;
+  border-radius: 10px;
+  background: #fff;
+  color: #285987;
+  box-shadow: 0 5px 16px rgba(19, 50, 82, .2);
+}
+.sidebar-toggle-button:hover { background: #e8f2fc; }
+.admin-layout.sidebar-hidden .sidebar-toggle-button { left: 12px; }
 .sidebar {
   position: sticky; top: 0; height: 100vh;
   background: linear-gradient(180deg, #09152a 0%, #071127 100%);
@@ -125,6 +145,9 @@ button { cursor: pointer; }
 .settings-option-icon { width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center; background: #e5f0fc; color: #285d91; }
 .settings-option > span:last-child { display: grid; gap: 4px; }
 .settings-option small { color: var(--muted); }
+.settings-option-control { cursor: default; }
+.settings-option-control:hover { transform: none; }
+.settings-option-control select { width: 100%; margin-top: 10px; border: 1px solid #b9ccdf; border-radius: 10px; padding: 9px 11px; background: #f8fbff; color: #1f3b58; font-weight: 800; }
 .settings-coming-soon { display: flex; align-items: center; gap: 9px; padding: 13px 16px; border-radius: 12px; background: #eef2f6; color: #718196; font-size: 13px; font-weight: 700; }
 
 .metric-grid { display: grid; grid-template-columns: repeat(5, minmax(0,1fr)); gap: 12px; margin-bottom: 22px; }
@@ -221,6 +244,8 @@ textarea { min-height: 90px; resize: vertical; }
 
 @media (max-width: 1180px) {
   .admin-layout { grid-template-columns: 210px minmax(0,1fr); }
+  .sidebar-toggle-button { left: 184px; }
+  .admin-layout.sidebar-hidden .sidebar-toggle-button { left: 12px; }
   .main-area { padding: 18px; }
   .metric-grid { grid-template-columns: repeat(3, minmax(0,1fr)); }
   .project-grid { grid-template-columns: repeat(2, minmax(0,1fr)); }
@@ -230,6 +255,8 @@ textarea { min-height: 90px; resize: vertical; }
 
 @media (max-width: 820px) {
   .admin-layout { display: block; }
+  .sidebar-toggle-button,
+  .admin-layout.sidebar-hidden .sidebar-toggle-button { top: 12px; left: 12px; }
   .sidebar { position: relative; height: auto; padding: 12px; }
   .brand-badge { min-height: auto; padding: 14px 16px; }
   .brand-badge strong, .brand-badge b { font-size: 18px; }
@@ -911,7 +938,7 @@ textarea { min-height: 90px; resize: vertical; }
 
 .schedule-board-scroll {
   width: 100%;
-  overflow-x: hidden;
+  overflow-x: auto;
   overflow-y: auto;
   max-height: calc(100vh - 390px);
 }
@@ -922,6 +949,34 @@ textarea { min-height: 90px; resize: vertical; }
   align-items: stretch;
   background: #fff;
 }
+
+.schedule-week-group {
+  position: sticky;
+  top: 0;
+  z-index: 11;
+  display: grid;
+  place-content: center;
+  min-height: 32px;
+  border-right: 1px solid #9fb5c9;
+  border-bottom: 1px solid #9fb5c9;
+  background: #d7e8f8;
+  color: #1e4f7f;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: .14em;
+}
+
+.schedule-week-group-spacer {
+  grid-column: 1;
+  background: #cfdfed;
+}
+
+.schedule-week-group.next {
+  border-left: 3px solid #69a4d8;
+  background: #e5f1fb;
+}
+
+.schedule-board.has-week-groups .schedule-head { top: 32px; }
 
 .schedule-head {
   position: sticky;
@@ -970,7 +1025,7 @@ textarea { min-height: 90px; resize: vertical; }
 .schedule-meta-head {
   left: 0;
   z-index: 10;
-  grid-template-columns: minmax(84px, 1.5fr) minmax(76px, 1.25fr) 42px 50px 50px minmax(54px, .9fr) 44px;
+  grid-template-columns: minmax(240px, 3.2fr) minmax(76px, .9fr) minmax(56px, .65fr) 54px 54px minmax(62px, .8fr) 44px;
   place-content: stretch;
   align-items: stretch;
   background: #dbe9f6;
@@ -990,7 +1045,7 @@ textarea { min-height: 90px; resize: vertical; }
 .schedule-row {
   grid-column: 1 / -1;
   display: grid;
-  min-height: 88px;
+  min-height: 52px;
   border-bottom: 1px solid #d8e2ec;
 }
 
@@ -1001,7 +1056,7 @@ textarea { min-height: 90px; resize: vertical; }
   grid-column: 1;
   grid-row: 1;
   display: grid;
-  grid-template-columns: minmax(84px, 1.5fr) minmax(76px, 1.25fr) 42px 50px 50px minmax(54px, .9fr) 44px;
+  grid-template-columns: minmax(240px, 3.2fr) minmax(76px, .9fr) minmax(56px, .65fr) 54px 54px minmax(62px, .8fr) 44px;
   align-items: stretch;
   min-width: 0;
   padding: 0;
@@ -1022,11 +1077,14 @@ textarea { min-height: 90px; resize: vertical; }
   font-size: 10px;
   text-align: center;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .schedule-work-content {
-  line-height: 1.35;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .schedule-assignee-compact {
@@ -1050,21 +1108,28 @@ textarea { min-height: 90px; resize: vertical; }
 
 .schedule-meta-work {
   display: flex;
-  flex-direction: column;
-  align-items: flex-start;
+  align-items: center;
   justify-content: center;
-  gap: 5px;
+  gap: 6px;
   padding-left: 9px;
   text-align: left;
 }
 
 .schedule-meta-work strong {
-  width: 100%;
+  min-width: 0;
+  flex: 1;
   overflow: hidden;
   color: #182f48;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.schedule-meta-work .badge {
+  flex: 0 0 auto;
+  padding: 2px 5px;
+  font-size: 9px;
+  line-height: 1.2;
 }
 
 .schedule-meta-cell > span > small {
@@ -1102,7 +1167,7 @@ textarea { min-height: 90px; resize: vertical; }
   z-index: 3;
   grid-row: 1;
   align-self: center;
-  height: 34px;
+  height: 28px;
   margin: 0 4px;
   overflow: hidden;
   border: 0;
@@ -1298,6 +1363,7 @@ textarea { min-height: 90px; resize: vertical; }
   }
 
   .sidebar,
+  .sidebar-toggle-button,
   .schedule-toolbar,
   .schedule-row-actions,
   .modal-backdrop {
@@ -1329,7 +1395,8 @@ textarea { min-height: 90px; resize: vertical; }
   .schedule-sheet-subbar { min-height: 30px; padding-block: 4px; }
   .schedule-board-scroll { max-height: none; overflow: visible; }
   .schedule-head { position: static; min-height: 44px; }
-  .schedule-row { min-height: 62px; break-inside: avoid; }
+  .schedule-week-group { position: static; min-height: 25px; }
+  .schedule-row { min-height: 44px; break-inside: avoid; }
   .schedule-meta-cell { position: static; }
   .schedule-meta-head > span:last-child { visibility: hidden; }
   .schedule-bar { box-shadow: none; }

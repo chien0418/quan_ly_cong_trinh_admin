@@ -6,6 +6,7 @@ import { AdminShell } from '@/components/admin-shell'
 import { Modal } from '@/components/modal'
 import { useAuth } from '@/components/auth-provider'
 import { createClient } from '@/lib/supabase/client'
+import { normalizeWeekStartDay, WEEK_START_CHANGE_EVENT, WEEK_START_STORAGE_KEY, type WeekStartDay } from '@/lib/schedule-settings'
 import type { Employee, Project, ScheduleEntry, ScheduleEntryEmployee } from '@/lib/types'
 
 type ViewMode = 'day' | 'week' | 'month' | 'year'
@@ -70,9 +71,9 @@ function addDays(date: Date, amount: number) {
   return next
 }
 
-function startOfWeek(date: Date) {
+function startOfWeek(date: Date, weekStartDay: WeekStartDay) {
   const next = new Date(date)
-  const offset = (next.getDay() + 6) % 7
+  const offset = (next.getDay() - weekStartDay + 7) % 7
   next.setDate(next.getDate() - offset)
   return next
 }
@@ -103,10 +104,10 @@ function emptyForm(anchor: Date): ScheduleForm {
   }
 }
 
-function getViewRange(mode: ViewMode, anchor: Date) {
+function getViewRange(mode: ViewMode, anchor: Date, weekStartDay: WeekStartDay) {
   if (mode === 'day') return { start: new Date(anchor), end: new Date(anchor) }
   if (mode === 'week') {
-    const start = startOfWeek(anchor)
+    const start = startOfWeek(anchor, weekStartDay)
     return { start, end: addDays(start, 13) }
   }
   if (mode === 'month') {
@@ -124,7 +125,7 @@ function getViewRange(mode: ViewMode, anchor: Date) {
 function moveAnchor(mode: ViewMode, anchor: Date, direction: number) {
   const next = new Date(anchor)
   if (mode === 'day') next.setDate(next.getDate() + direction)
-  if (mode === 'week') next.setDate(next.getDate() + direction * 14)
+  if (mode === 'week') next.setDate(next.getDate() + direction * 7)
   if (mode === 'month') next.setMonth(next.getMonth() + direction)
   if (mode === 'year') next.setFullYear(next.getFullYear() + direction)
   return next
@@ -166,8 +167,9 @@ export default function SchedulePage() {
   const [query, setQuery] = useState('')
   const [employeeQuery, setEmployeeQuery] = useState('')
   const [preparedAt, setPreparedAt] = useState<Date | null>(null)
+  const [weekStartDay, setWeekStartDay] = useState<WeekStartDay>(1)
 
-  const range = useMemo(() => getViewRange(mode, anchor), [mode, anchor])
+  const range = useMemo(() => getViewRange(mode, anchor, weekStartDay), [mode, anchor, weekStartDay])
   const rangeStart = isoDate(range.start)
   const rangeEnd = isoDate(range.end)
 
@@ -223,6 +225,14 @@ export default function SchedulePage() {
 
   useEffect(() => { void load() }, [load])
   useEffect(() => { setPreparedAt(new Date()) }, [])
+  useEffect(() => {
+    setWeekStartDay(normalizeWeekStartDay(window.localStorage.getItem(WEEK_START_STORAGE_KEY)))
+    const handleWeekStartChange = (event: Event) => {
+      setWeekStartDay(normalizeWeekStartDay(String((event as CustomEvent<number>).detail)))
+    }
+    window.addEventListener(WEEK_START_CHANGE_EVENT, handleWeekStartChange)
+    return () => window.removeEventListener(WEEK_START_CHANGE_EVENT, handleWeekStartChange)
+  }, [])
 
   const filteredEntries = useMemo(() => {
     const keyword = query.trim().toLowerCase()
@@ -491,7 +501,7 @@ function ScheduleBoard({ mode, start, end, entries, loading, profileName, prepar
           isToday: isoDate(date) === isoDate(new Date()),
           nextWeek: mode === 'week' && index >= 7,
         }))
-  const template = `minmax(420px, 27%) repeat(${columns.length}, minmax(0, 1fr))`
+  const template = `minmax(580px, 38%) repeat(${columns.length}, minmax(34px, 1fr))`
   function timeMinutes(value: string) {
     const [hour, minute] = value.slice(0, 5).split(':').map(Number)
     return hour * 60 + minute
@@ -539,7 +549,12 @@ function ScheduleBoard({ mode, start, end, entries, loading, profileName, prepar
       </div>
       <div className="schedule-sheet-subbar"><span><CalendarDays size={17} />{mode === 'week' ? '今週・来週の14日間' : mode === 'day' ? '24時間表示' : `${viewLabels[mode]}単位表示`}</span><strong>{entries.length}件</strong></div>
       <div className="schedule-board-scroll">
-        <div className={`schedule-board ${columns.length >= 24 ? 'dense' : ''}`} style={{ gridTemplateColumns: template }}>
+        <div className={`schedule-board ${columns.length >= 24 ? 'dense' : ''} ${mode === 'week' ? 'has-week-groups' : ''}`} style={{ gridTemplateColumns: template }}>
+          {mode === 'week' && <>
+            <div className="schedule-week-group schedule-week-group-spacer" />
+            <div className="schedule-week-group current" style={{ gridColumn: '2 / 9' }}>今週</div>
+            <div className="schedule-week-group next" style={{ gridColumn: '9 / 16' }}>来週</div>
+          </>}
           <div className="schedule-head schedule-meta-head"><span>工事名</span><span>作業</span><span>担当</span><span>{mode === 'day' ? '開始' : '開始日'}</span><span>{mode === 'day' ? '終了' : '終了日'}</span><span>備考</span><span>{canEdit ? '操作' : ''}</span></div>
           {columns.map((column) => <div key={column.key} className={`schedule-head ${column.weekend ? 'weekend' : ''} ${column.isToday ? 'today' : ''} ${column.nextWeek ? 'next-week' : ''}`}><strong>{column.label}</strong><small>{column.subLabel}</small></div>)}
 
@@ -549,7 +564,7 @@ function ScheduleBoard({ mode, start, end, entries, loading, profileName, prepar
             return (
               <div className="schedule-row" style={{ gridTemplateColumns: template }} key={entry.id}>
                 <div className="schedule-meta-cell">
-                  <div className="schedule-meta-work"><strong>{entry.work_name}</strong><span className={`badge ${entry.status === 'completed' ? 'done' : entry.status === 'on_hold' ? 'hold' : entry.status === 'planned' ? 'wait' : 'work'}`}>{statusLabels[entry.status]}</span></div>
+                  <div className="schedule-meta-work"><strong title={entry.work_name}>{entry.work_name}</strong><span className={`badge ${entry.status === 'completed' ? 'done' : entry.status === 'on_hold' ? 'hold' : entry.status === 'planned' ? 'wait' : 'work'}`}>{statusLabels[entry.status]}</span></div>
                   <span className="schedule-work-content" title={entry.work_content ?? ''}>{entry.work_content || '—'}</span>
                   {assignedEmployees.length > 1 ? (
                     <div className="schedule-assignee-compact">
@@ -557,8 +572,8 @@ function ScheduleBoard({ mode, start, end, entries, loading, profileName, prepar
                       <button type="button" onClick={() => setVisibleEmployees(assignedEmployees)} aria-label={`${entry.work_name}の担当社員一覧`}>+{assignedEmployees.length - 1}</button>
                     </div>
                   ) : <span>{assignedEmployees[0]?.display_name || entry.assignee_name || '—'}</span>}
-                  {mode === 'day' ? <span>{entry.start_time.slice(0, 5)}</span> : <span>{entry.start_date.slice(5).replace('-', '/')}<small>{entry.start_time.slice(0, 5)}</small></span>}
-                  {mode === 'day' ? <span>{entry.end_time.slice(0, 5)}</span> : <span>{entry.end_date.slice(5).replace('-', '/')}<small>{entry.end_time.slice(0, 5)}</small></span>}
+                  <span>{mode === 'day' ? entry.start_time.slice(0, 5) : entry.start_date.slice(5).replace('-', '/')}</span>
+                  <span>{mode === 'day' ? entry.end_time.slice(0, 5) : entry.end_date.slice(5).replace('-', '/')}</span>
                   <span title={entry.note ?? ''}>{entry.note || '—'}</span>
                   <div className="schedule-row-actions">{canEdit && <><button className="icon-button" onClick={() => onEdit(entry)} aria-label="編集"><Edit3 size={15} /></button><button className="icon-button danger" onClick={() => onRemove(entry)} aria-label="削除"><Trash2 size={15} /></button></>}</div>
                 </div>

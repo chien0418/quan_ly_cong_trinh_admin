@@ -2,11 +2,12 @@
 
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { useState } from 'react'
-import { BarChart3, Boxes, BriefcaseBusiness, CalendarDays, Clock3, History, KeyRound, LogOut, Settings, ShoppingCart, Users } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { BarChart3, Boxes, BriefcaseBusiness, CalendarDays, ChevronLeft, ChevronRight, Clock3, History, KeyRound, LogOut, Settings, ShoppingCart, Users } from 'lucide-react'
 import { useAuth } from './auth-provider'
 import { RouteGuard } from './route-guard'
 import { Modal } from './modal'
+import { normalizeWeekStartDay, WEEK_START_CHANGE_EVENT, WEEK_START_STORAGE_KEY, weekStartOptions, type WeekStartDay } from '@/lib/schedule-settings'
 
 const navItems = [
   { href: '/dashboard', label: 'ダッシュボード', icon: BarChart3 },
@@ -17,11 +18,34 @@ const navItems = [
   { href: '/orders', label: '発注履歴管理', icon: ShoppingCart },
 ]
 
+const SIDEBAR_VISIBILITY_STORAGE_KEY = 'current-service-sidebar-visibility'
+
 export function AdminShell({ children }: { children: React.ReactNode; title: string; subtitle?: string }) {
   const pathname = usePathname()
   const router = useRouter()
   const { profile, signOut } = useAuth()
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [weekStartDay, setWeekStartDay] = useState<WeekStartDay>(1)
+  const [sidebarVisible, setSidebarVisible] = useState(true)
+
+  useEffect(() => {
+    setWeekStartDay(normalizeWeekStartDay(window.localStorage.getItem(WEEK_START_STORAGE_KEY)))
+    setSidebarVisible(window.localStorage.getItem(SIDEBAR_VISIBILITY_STORAGE_KEY) !== 'hidden')
+  }, [])
+
+  function toggleSidebar() {
+    setSidebarVisible((current) => {
+      const next = !current
+      window.localStorage.setItem(SIDEBAR_VISIBILITY_STORAGE_KEY, next ? 'visible' : 'hidden')
+      return next
+    })
+  }
+
+  function changeWeekStartDay(value: WeekStartDay) {
+    setWeekStartDay(value)
+    window.localStorage.setItem(WEEK_START_STORAGE_KEY, String(value))
+    window.dispatchEvent(new CustomEvent(WEEK_START_CHANGE_EVENT, { detail: value }))
+  }
 
   async function handleLogout() {
     await signOut()
@@ -31,7 +55,7 @@ export function AdminShell({ children }: { children: React.ReactNode; title: str
 
   return (
     <RouteGuard>
-      <div className="admin-layout">
+      <div className={`admin-layout ${sidebarVisible ? '' : 'sidebar-hidden'}`}>
         <aside className="sidebar">
           <div className="brand-badge">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -86,6 +110,10 @@ export function AdminShell({ children }: { children: React.ReactNode; title: str
           </div>
         </aside>
 
+        <button type="button" className="sidebar-toggle-button" onClick={toggleSidebar} aria-label={sidebarVisible ? 'サイドバーを隠す' : 'サイドバーを表示'} aria-expanded={sidebarVisible}>
+          {sidebarVisible ? <ChevronLeft size={20} /> : <ChevronRight size={20} />}
+        </button>
+
         <main className="main-area">
           <section className="content-area">{children}</section>
         </main>
@@ -100,9 +128,15 @@ export function AdminShell({ children }: { children: React.ReactNode; title: str
               <span className="settings-option-icon"><KeyRound size={21} /></span>
               <span><strong>パスワード（PIN）変更</strong><small>ログイン用の4桁PINを変更します。</small></span>
             </Link>
-            <div className="settings-coming-soon">
-              <Settings size={18} />
-              その他の設定は今後追加予定です。
+            <div className="settings-option settings-option-control">
+              <span className="settings-option-icon"><CalendarDays size={21} /></span>
+              <span>
+                <strong>週間工事表の週開始日</strong>
+                <small>「今週」として表示する最初の曜日を設定します。</small>
+                <select value={weekStartDay} onChange={(event) => changeWeekStartDay(Number(event.target.value) as WeekStartDay)} aria-label="今週の開始曜日">
+                  {weekStartOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </span>
             </div>
           </div>
         </Modal>
